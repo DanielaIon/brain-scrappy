@@ -1,0 +1,16 @@
+{
+  "name": "brainmap",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "accountList": "node src/scrapAccountList.js",
+    "account": "node src/scrappAccount.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^0.24.0",
+    "puppeteer": "^13.0.0"
+  }
+}

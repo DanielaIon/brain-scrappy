@@ -1,0 +1,1 @@
+Proiectul are ca scop extragerea sub forma unui JSON a tuturor informațiilor despre un cercetător care are cont în platforma BrainMap. De exemplu: https://www.brainmap.ro/florin-pop. Pe baza informațiilor extrase ne propunem să analizăm legăturile dintre cercetători, realizarea unor corelații și identificarea unor șabloane.
