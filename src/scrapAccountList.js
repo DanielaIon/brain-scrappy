@@ -1,61 +1,65 @@
 const puppeteer = require('puppeteer');
 
-
-(async () => {
-
-    //1 - Click On search to get the first page with profiles
-    const browser = await puppeteer.launch({
-        headless: true,
-        args: [
-          '--disable-extensions-except=/path/to/manifest/folder/',
-          '--load-extension=/path/to/manifest/folder/',
-        ]
-      });
-    const page = await browser.newPage()
-    await page.goto('https://www.brainmap.ro/')
-
-    await page.click('input.btn-lp-search')
-    await page.waitForSelector('div.linkProfile')
-    
-    let mylist = [];
-    await page.waitForTimeout(4000);
-    let firstPage = await page.evaluate(() => {
-        let results = [];
-        let items = document.querySelectorAll('div.container-search-button a.btnProfileSearch');
-        items.forEach((item) => {
-            let people = {
-                url:  item.getAttribute('href')
-            }
-            results.push(people);
-        });
-        return results;
+async function extractProfilesFromPage(page) {
+    return page.evaluate(() => {
+        const profilesPage = [];
+        const elements = document.querySelectorAll('div.container-search-button a.btnProfileSearch');
+        elements.forEach((element) => element.getAttribute('href') !== 'http://' && profilesPage.push({
+            url: element.getAttribute('href')
+        }));
+        return profilesPage;
     });
-    mylist.push(...firstPage)
-        
-    for (let j = 2; j < 7; j++){
-        await page.waitForTimeout(10000);
-        const elements = await page.$x("//*[@class='tablePageNumberUnselected' and contains(., '" + j + "')]");
-        await elements[0].click();
-        await page.waitForTimeout(4000);
-        await page.waitForXPath("//*[@class='tablePageNumberSelected' and contains(., '" + j + "')]");
+}
 
-        snd = await page.evaluate(() => {
-            let results = [];
-            let items = document.querySelectorAll('div.container-search-button a.btnProfileSearch');
-            items.forEach((item) => {
-                let people = {
-                    url: item.getAttribute('href')
+(async() => {
+    // access brainmap.ro
+    const browser = await puppeteer.launch({
+        headless: false
+    });
+    const page = await browser.newPage();
+    await page.goto('https://www.brainmap.ro/');
+    await page.setCookie(...[{
+        'name': 'ath-consent-accepted',
+        'value': 'a7d1a83349f216881133a7e5ff8c51ce253aef00-82172179051-83299499500',
+    }, {
+        'name': 'ath-consent',
+        'value': 'accept'
+    }]);
+
+    // empty search to load first page of account list
+    await page.click('input.btn-lp-search');
+    await page.waitForSelector('div.linkProfile');
+    await page.waitForTimeout(4000);
+
+    // get profiles url page by page
+    const profiles = [];
+    let currentPageNumber = 1;
+    while (true) {
+        profiles.push(...await extractProfilesFromPage(page));
+        console.log(`Total profiles scraped: ${profiles.length}`);
+
+        currentPageNumber++;
+        await page.$$eval('a.tablePageNumberUnselected', (elements, nextPageNumber) => elements.filter(e => parseInt(e.textContent) === nextPageNumber)[0].click(), currentPageNumber);
+
+        try {
+            // console.log("//*[@class='tablePageNumberSelected' and contains(., '" + currentPage + "')]");
+            await page.waitForTimeout(3000);
+            await page.waitForXPath(
+                "//*[@class='tablePageNumberSelected' and contains(., '" + currentPageNumber + "')]", {
+                    timeout: 10000
                 }
-                results.push(people);
-            });
-            return results;
-        });
-        mylist.push(...snd)
+            );
+        } catch (e) {
+            console.log(`Scraping ended before page ${currentPageNumber}`);
+            break;
+        }
     }
 
-    console.log(mylist)
-    await browser.close()
-   })()
+    // save profiles to a csv
+
+
+    await browser.close();
+})();
 
 /*  2 - For each next page:
         -> show each profile name + link : a class="btnProfileSearch" + href
