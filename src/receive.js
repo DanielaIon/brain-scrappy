@@ -1,37 +1,58 @@
 #!/usr/bin/env node
 
 var amqp = require('amqplib/callback_api');
+var amqpConn = null;
 
-amqp.connect('amqp://localhost', function(error0, connection) {
-  if (error0) {
-    throw error0;
-  }
-  connection.createChannel(function(error1, channel) {
-    if (error1) {
-      throw error1;
-    }
-    var exchange = 'logs';
-
-    channel.assertExchange(exchange, 'fanout', {
-      durable: false
-    });
-
-    channel.assertQueue('', {
-      exclusive: true
-    }, function(error2, q) {
-      if (error2) {
-        throw error2;
+function start() {
+    amqp.connect('amqp://localhost', function(err, conn) {
+      if (err) {
+        console.error("[AMQP]", err.message);
+        return setTimeout(start, 1000);
       }
-      console.log(" [*] Waiting for messages in %s. To exit press CTRL+C", q.queue);
-      channel.bindQueue(q.queue, exchange, '');
+      conn.on("error", function(err) {
+        if (err.message !== "Connection closing") {
+          console.error("[AMQP] conn error", err.message);
+        }
+      });
+      conn.on("close", function() {
+        console.error("[AMQP] reconnecting");
+        return setTimeout(start, 1000);
+      });
+      console.log("[AMQP] connected");
+      amqpConn = conn;
+      startWorker();
+    });
+  }
 
-      channel.consume(q.queue, function(msg) {
-        if(msg.content) {
-            console.log(" [x] %s", msg.content.toString());
-          }
-      }, {
-        noAck: true
+// A worker that acks messages only if processed successfully
+function startWorker() {
+    amqpConn.createChannel(function(err, ch) {
+      if (closeOnErr(err)) return;
+      ch.on("error", function(err) {
+        console.error("[AMQP] channel error", err.message);
+      });
+      ch.on("close", function() {
+        console.log("[AMQP] channel closed");
+      });
+  
+      ch.prefetch(10);
+      ch.assertQueue("accounts", { durable: true }, function(err, _ok) {
+        if (closeOnErr(err)) return;
+        ch.consume("accounts", processMsg, { noAck: true });
+        console.log("Worker is started");
       });
     });
-  });
-});
+  }
+
+  function processMsg(msg) {
+    console.log("PDF processing of ", msg.content.toString());
+  }
+
+  function closeOnErr(err) {
+    if (!err) return false;
+    console.error("[AMQP] error", err);
+    amqpConn.close();
+    return true;
+  }
+
+start();

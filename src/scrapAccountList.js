@@ -1,18 +1,96 @@
 const puppeteer = require('puppeteer');
-const amqp = require('amqplib/callback_api');
+var amqp = require('amqplib/callback_api');
+var amqpConn = null;
 
+function startRabbitMQ() {
+    amqp.connect('amqp://localhost', function(err, conn) {
+      if (err) {
+        console.error("[AMQP]", err.message);
+        return setTimeout(startRabbitMQ, 1000);
+      }
+      conn.on("error", function(err) {
+        if (err.message !== "Connection closing") {
+          console.error("[AMQP] conn error", err.message);
+        }
+      });
+      conn.on("close", function() {
+        console.error("[AMQP] reconnecting");
+        return setTimeout(startRabbitMQ, 1000);
+      });
+      console.log("[AMQP] connected");
+      amqpConn = conn;
+      startPublisher();
+    });
+  }
+
+function closeOnErr(err) {
+    if (!err) return false;
+    console.error("[AMQP] error", err);
+    amqpConn.close();
+    return true;
+  }
+
+function publish(exchange, routingKey, content) {
+    try {
+      pubChannel.publish(exchange, routingKey, content, { persistent: true },
+                        function(err, ok) {
+                          if (err) {
+                            console.error("[AMQP] publish", err);
+                            offlinePubQueue.push([exchange, routingKey, content]);
+                            pubChannel.connection.close();
+                          }
+                        });
+    } catch (e) {
+      console.error("[AMQP] publish", e.message);
+      offlinePubQueue.push([exchange, routingKey, content]);
+    }
+  }
+
+var pubChannel = null;
+var offlinePubQueue = [];
+function startPublisher() {
+  amqpConn.createConfirmChannel(function(err, ch) {
+    if (closeOnErr(err)) return;
+    ch.on("error", function(err) {
+      console.error("[AMQP] channel error", err.message);
+    });
+    ch.on("close", function() {
+      console.log("[AMQP] channel closed");
+    });
+
+    pubChannel = ch;
+    while (true && offlinePubQueue.length > 0) {
+
+        var [exchange, routingKey, content] = offlinePubQueue.shift();
+        publish(exchange, routingKey, content);
+        
+    }
+  });
+}
+
+function publishEachAccount(accountList) {
+    accountList.forEach(account => {
+        publish("", "accounts", new Buffer(`${account.url}`));
+    });
+
+}
 async function extractProfilesFromPage(page) {
     return page.evaluate(() => {
         const profilesPage = [];
         const elements = document.querySelectorAll('div.container-search-button a.btnProfileSearch');
         elements.forEach((element) => element.getAttribute('href') !== 'http://' && profilesPage.push({
-            url: element.getAttribute('href')
+            //Clean the url, remove the previous path if it exist ex:  https://www.brainmap.ro/simona-r-soare is /simona-r-soare
+            url: "/"+(element.getAttribute('href')).split("/").pop()
         }));
         return profilesPage;
     });
 }
 
+
 (async() => {
+    //connect to RABITMQ
+    startRabbitMQ();
+
     // access brainmap.ro
     const browser = await puppeteer.launch({
         headless: true
@@ -33,17 +111,15 @@ async function extractProfilesFromPage(page) {
     await page.waitForTimeout(4000);
 
     // get profiles url page by page
-    const profiles = [];
     let currentPageNumber = 1;
-    while (true) {
-        profiles.push(...await extractProfilesFromPage(page));
-        console.log(`Total profiles scraped: ${profiles.length}`);
+    while (true) {   
+
+        publishEachAccount(await extractProfilesFromPage(page));
 
         currentPageNumber++;
         await page.$$eval('a.tablePageNumberUnselected', (elements, nextPageNumber) => elements.filter(e => parseInt(e.textContent) === nextPageNumber)[0].click(), currentPageNumber);
         await page.waitForNavigation()
         try {
-            // console.log("//*[@class='tablePageNumberSelected' and contains(., '" + currentPage + "')]");
             await page.waitForTimeout(3000);
             await page.waitForXPath(
                 "//*[@class='tablePageNumberSelected' and contains(., '" + currentPageNumber + "')]", {
@@ -55,9 +131,6 @@ async function extractProfilesFromPage(page) {
             break;
         }
     }
-
-    // save profiles to a csv
-
 
     await browser.close();
 })();
