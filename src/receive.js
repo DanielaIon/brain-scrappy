@@ -1,13 +1,14 @@
 #!/usr/bin/env node
-const puppeteer = require('puppeteer');
+fs = require('fs');
+var accountStream = fs.createWriteStream('AccountInfo.json', {flags: 'a'});
 var amqp = require('amqplib/callback_api');
 var amqpConn = null;
 
-function startRabbitMQ(browser) {
+function startRabbitMQ() {
     amqp.connect('amqp://localhost', function(err, conn) {
       if (err) {
         console.error("[AMQP]", err.message);
-        return setTimeout(startRabbitMQ(browser), 1000);
+        return setTimeout(startRabbitMQ, 1000);
       }
       conn.on("error", function(err) {
         if (err.message !== "Connection closing") {
@@ -16,16 +17,16 @@ function startRabbitMQ(browser) {
       });
       conn.on("close", function() {
         console.error("[AMQP] reconnecting");
-        return setTimeout(startRabbitMQ(browser), 1000);
+        return setTimeout(startRabbitMQ, 1000);
       });
       console.log("[AMQP] connected");
       amqpConn = conn;
-      startWorker(browser);
+      startWorker();
     });
   }
 
 // A worker that acks messages only if processed successfully
-function startWorker(browser) {
+function startWorker() {
     amqpConn.createChannel(function(err, ch) {
       if (closeOnErr(err)) return;
       ch.on("error", function(err) {
@@ -36,19 +37,19 @@ function startWorker(browser) {
       });
   
       ch.prefetch(10);
-      ch.assertQueue("accounts", { durable: true }, function(err, _ok) {
+      ch.assertQueue("scrappedAccounts", { durable: true }, function(err, _ok) {
         if (closeOnErr(err)) return;
-        ch.consume("accounts", processMsg(browser, ch), { noAck: false });
+        ch.consume("scrappedAccounts", processMsg(ch), { noAck: false });
         console.log("Worker is started");
       });
     });
   }
 
-  function processMsg(browser, ch) {
+  function processMsg( ch) {
       return (msg) => {
         (async () => {
-            var myObject = await scrappAccount(browser, msg.content.toString());
-            console.log(myObject)
+            //write in csv then flush
+            accountStream.write(msg.content.toString()+"\r\n");
             ch.ack(msg);
         })();
         }   
@@ -61,70 +62,10 @@ function startWorker(browser) {
     return true;
   }
 
-async function scrappAccount(browser, url){
-
-    var page = await browser.newPage()    
-    await page.goto('https://www.brainmap.ro' + url)
-
-    const details = {
-        'keywords':[],
-        'country': [],
-        'affiliations': [],
-        'roles':[],
-        'name':[]
-    }
-
-    const myfunction = async (text) => {
-        return await page.evaluate((text) => {
-            let results = [];
-            let items = document.querySelectorAll(text);
-            items.forEach((item) => {
-                let content = item.innerText.split(" | ")
-                results.push(...content);
-            });
-            return results;
-        }, text);
-    }
-
-    details.keywords = await myfunction('a.key_tag');
-    details.country = await myfunction("[id*=\"idTaraLucru\"]");
-    details.affiliations = await myfunction("div.profile-dash h5 label[id*=\"instNume\"]");
-    details.roles = await myfunction("label[id*=\"roles\"]");
-    details.name = await myfunction("[id*=\"Name\"]");
-
-    page.close()
-    return details;
-}
 (async () => {
 
-    // access brainmap.ro
-    const browser = await puppeteer.launch({
-        headless: true,
-        args: [
-          '--disable-extensions-except=/path/to/manifest/folder/',
-          '--load-extension=/path/to/manifest/folder/',
-        ]
-      });
-
     //connect to RABITMQ
-    startRabbitMQ(browser);
+    startRabbitMQ();
 
-    // let urls = [
-    //     '/florin-pop',      
-    //     '/monica-turturean'
-    //   ];
-
-    // const accountInfo = [];
-   
-    // for (let i = 0; i < urls.length; i++) {
-    //     accountInfo.push(await scrappAccount(page, urls[i]));        
-    // };
-
-    // console.log(accountInfo)
-
-    // fs.writeFile('AccountInfo.json', accountInfo, function (err) {
-    // if (err) return console.log(err);
-    // // console.log('Hello World > helloworld.txt');
-    // });
    })()
 

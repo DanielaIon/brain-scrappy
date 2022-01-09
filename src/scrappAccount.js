@@ -1,41 +1,143 @@
+#!/usr/bin/env node
 const puppeteer = require('puppeteer');
-fs = require('fs');
+var amqp = require('amqplib/callback_api');
+var amqpConn = null;
 
-async function scrappAccount(page, url){
-        await page.goto('https://www.brainmap.ro' + url)
-
-        const details = {
-            'keywords':[],
-            'country': [],
-            'affiliations': [],
-            'roles':[],
-            'name':[]
+function startRabbitMQ(browser) {
+    amqp.connect('amqp://localhost', function(err, conn) {
+      if (err) {
+        console.error("[AMQP]", err.message);
+        return setTimeout(startRabbitMQ(browser), 1000);
+      }
+      conn.on("error", function(err) {
+        if (err.message !== "Connection closing") {
+          console.error("[AMQP] conn error", err.message);
         }
+      });
+      conn.on("close", function() {
+        console.error("[AMQP] reconnecting");
+        return setTimeout(startRabbitMQ(browser), 1000);
+      });
+      console.log("[AMQP] connected");
+      amqpConn = conn;
+      startWorker(browser);
+      startPublisher() 
+    });
+  }
 
-        const myfunction = async (text) => {
-            return await page.evaluate((text) => {
-                let results = [];
-                let items = document.querySelectorAll(text);
-                items.forEach((item) => {
-                    let content = item.innerText.split(" | ")
-                    results.push(...content);
-                });
-                return results;
-            }, text);
-        }
+  function publish(exchange, routingKey, content) {
+    try {
+      pubChannel.publish(exchange, routingKey, content, { persistent: true },
+                        function(err, ok) {
+                          if (err) {
+                            console.error("[AMQP] publish", err);
+                            offlinePubQueue.push([exchange, routingKey, content]);
+                            pubChannel.connection.close();
+                          }
+                        });
+    } catch (e) {
+      console.error("[AMQP] publish", e.message);
+      offlinePubQueue.push([exchange, routingKey, content]);
+    }
+  }
 
-        details.keywords = await myfunction('a.key_tag');
-        details.country = await myfunction("[id*=\"idTaraLucru\"]");
-        details.affiliations = await myfunction("div.profile-dash h5 label[id*=\"instNume\"]");
-        details.roles = await myfunction("label[id*=\"roles\"]");
-        details.name = await myfunction("[id*=\"Name\"]");
+var pubChannel = null;
+var offlinePubQueue = [];
+function startPublisher() {
+  amqpConn.createConfirmChannel(function(err, ch) {
+    if (closeOnErr(err)) return;
+    ch.on("error", function(err) {
+      console.error("[AMQP] channel error", err.message);
+    });
+    ch.on("close", function() {
+      console.log("[AMQP] channel closed");
+    });
 
-        return details;
+    pubChannel = ch;
+    while (true && offlinePubQueue.length > 0) {
+
+        var [exchange, routingKey, content] = offlinePubQueue.shift();
+        publish(exchange, routingKey, content);
+        
+    }
+  });
 }
 
+// A worker that acks messages only if processed successfully
+function startWorker(browser) {
+    amqpConn.createChannel(function(err, ch) {
+      if (closeOnErr(err)) return;
+      ch.on("error", function(err) {
+        console.error("[AMQP] channel error", err.message);
+      });
+      ch.on("close", function() {
+        console.log("[AMQP] channel closed");
+      });
+  
+      ch.prefetch(10);
+      ch.assertQueue("accounts", { durable: true }, function(err, _ok) {
+        if (closeOnErr(err)) return;
+        ch.consume("accounts", processMsg(browser, ch), { noAck: false });
+        console.log("Worker is started");
+      });
+    });
+  }
+
+  function processMsg(browser, ch) {
+      return (msg) => {
+        (async () => {
+            var myObject = await scrappAccount(browser, msg.content.toString());
+            //do sth with the details you obtained
+            publish("", "scrappedAccounts", new Buffer(`${JSON.stringify(myObject, null, 2)}`));
+            ch.ack(msg);
+        })();
+        }   
+    }
+
+  function closeOnErr(err) {
+    if (!err) return false;
+    console.error("[AMQP] error", err);
+    amqpConn.close();
+    return true;
+  }
+
+async function scrappAccount(browser, url){
+
+    var page = await browser.newPage()    
+    await page.goto('https://www.brainmap.ro' + url)
+
+    const details = {
+        'keywords':[],
+        'country': [],
+        'affiliations': [],
+        'roles':[],
+        'name':[]
+    }
+
+    const myfunction = async (text) => {
+        return await page.evaluate((text) => {
+            let results = [];
+            let items = document.querySelectorAll(text);
+            items.forEach((item) => {
+                let content = item.innerText.split(" | ")
+                results.push(...content);
+            });
+            return results;
+        }, text);
+    }
+
+    details.keywords = await myfunction('a.key_tag');
+    details.country = await myfunction("[id*=\"idTaraLucru\"]");
+    details.affiliations = await myfunction("div.profile-dash h5 label[id*=\"instNume\"]");
+    details.roles = await myfunction("label[id*=\"roles\"]");
+    details.name = await myfunction("[id*=\"Name\"]");
+
+    page.close()
+    return details;
+}
 (async () => {
 
-    //1 - Click On search to get the first page with profiles
+    // access brainmap.ro
     const browser = await puppeteer.launch({
         headless: true,
         args: [
@@ -43,28 +145,8 @@ async function scrappAccount(page, url){
           '--load-extension=/path/to/manifest/folder/',
         ]
       });
-    const page = await browser.newPage()
-    let urls = [
-        '/bogdan-marian-diaconu'
-      ];
 
-    const accountInfo = [];
-   
-    for (let i = 0; i < urls.length; i++) {
-        accountInfo.push(await scrappAccount(page, urls[i]));        
-    };
-
-    console.log(accountInfo)
-
-    // fs.writeFile('AccountInfo.json', accountInfo, function (err) {
-    // if (err) return console.log(err);
-    // // console.log('Hello World > helloworld.txt');
-    // });
-
-    await browser.close()
+    //connect to RABITMQ
+    startRabbitMQ(browser);
    })()
 
-/*  2 - For each next page:
-        -> show each profile name + link : a class="btnProfileSearch" + href
-        -> click on the next page : a : tablePageNumberUnselected & text for a > crt+1
-*/

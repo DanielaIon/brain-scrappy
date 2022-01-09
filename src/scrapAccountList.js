@@ -115,7 +115,7 @@ async function extractProfilesFromPage(page) {
     while (true) {   
 
         publishEachAccount(await extractProfilesFromPage(page));
-
+        console.log("Pagina: "+currentPageNumber);
         currentPageNumber++;
         await page.$$eval('a.tablePageNumberUnselected', (elements, nextPageNumber) => elements.filter(e => parseInt(e.textContent) === nextPageNumber)[0].click(), currentPageNumber);
         await page.waitForNavigation()
