@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 fs = require('fs');
-var accountStream = fs.createWriteStream('AccountInfo.json', {flags: 'a'});
+var accountStream = fs.createWriteStream('scrappedAccounts.json', {flags: 'a'});
 var amqp = require('amqplib/callback_api');
 var amqpConn = null;
 
@@ -49,7 +49,7 @@ function startWorker() {
       return (msg) => {
         (async () => {
             //write in csv then flush
-            accountStream.write(msg.content.toString()+"\r\n");
+            accountStream.write(msg.content.toString()+",\r\n");
             ch.ack(msg);
         })();
         }   
@@ -65,7 +65,10 @@ function startWorker() {
 (async () => {
 
     //connect to RABITMQ
+    
+    accountStream.write("[");
     startRabbitMQ();
+    accountStream.write("]");
 
    })()
 
