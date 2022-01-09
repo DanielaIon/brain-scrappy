@@ -1,4 +1,5 @@
 const puppeteer = require('puppeteer');
+const amqp = require('amqplib/callback_api');
 
 async function extractProfilesFromPage(page) {
     return page.evaluate(() => {
@@ -14,7 +15,7 @@ async function extractProfilesFromPage(page) {
 (async() => {
     // access brainmap.ro
     const browser = await puppeteer.launch({
-        headless: false
+        headless: true
     });
     const page = await browser.newPage();
     await page.goto('https://www.brainmap.ro/');
@@ -40,7 +41,7 @@ async function extractProfilesFromPage(page) {
 
         currentPageNumber++;
         await page.$$eval('a.tablePageNumberUnselected', (elements, nextPageNumber) => elements.filter(e => parseInt(e.textContent) === nextPageNumber)[0].click(), currentPageNumber);
-
+        await page.waitForNavigation()
         try {
             // console.log("//*[@class='tablePageNumberSelected' and contains(., '" + currentPage + "')]");
             await page.waitForTimeout(3000);

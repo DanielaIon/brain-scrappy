@@ -5,11 +5,14 @@
   "main": "index.js",
   "scripts": {
     "accountList": "node src/scrapAccountList.js",
-    "account": "node src/scrappAccount.js"
+    "account": "node src/scrappAccount.js",
+    "send": "node src/send.js",
+    "receive": "node src/receive.js"
   },
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "amqplib": "^0.8.0",
     "axios": "^0.24.0",
     "puppeteer": "^13.0.0"
   }
